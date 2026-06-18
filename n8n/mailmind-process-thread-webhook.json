@@ -1,0 +1,90 @@
+{
+  "id": "mailmind-process-thread",
+  "name": "MailMind - Process Thread Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mailmind-process-thread",
+        "responseMode": "responseNode"
+      },
+      "id": "thread-webhook",
+      "name": "Thread Processing Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "mailmind-process-thread"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MAILMIND_APP_URL || 'http://host.docker.internal:3000'}}/api/ai/process",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-mailmind-user-id",
+              "value": "={{$json.body.userId || $env.MAILMIND_USER_ID}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "threadId",
+              "value": "={{$json.body.threadId}}"
+            }
+          ]
+        }
+      },
+      "id": "call-process-api",
+      "name": "Call MailMind Process API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}"
+      },
+      "id": "respond",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [780, 300]
+    }
+  ],
+  "connections": {
+    "Thread Processing Webhook": {
+      "main": [
+        [
+          {
+            "node": "Call MailMind Process API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call MailMind Process API": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

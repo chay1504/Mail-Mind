@@ -1,0 +1,76 @@
+{
+  "id": "mailmind-scheduled-sync",
+  "name": "MailMind - Scheduled Gmail Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 30 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MAILMIND_APP_URL || 'http://host.docker.internal:3000'}}/api/gmail/sync",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-mailmind-user-id",
+              "value": "={{$env.MAILMIND_USER_ID}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "maxResults",
+              "value": 50
+            },
+            {
+              "name": "query",
+              "value": "newer_than:90d"
+            }
+          ]
+        }
+      },
+      "id": "call-sync-api",
+      "name": "Call MailMind Sync API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Every 30 minutes": {
+      "main": [
+        [
+          {
+            "node": "Call MailMind Sync API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
