@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchMessage, getGmailClient, listMessageIds } from "@/lib/gmail";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { embedText, summarizeThread } from "@/lib/ai";
+import type { EmailCategory } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
   const userId =
@@ -15,7 +16,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const maxResults = Math.min(Number(body.maxResults || 50), 300);
+    const maxResults = Math.min(Number(body.maxResults || 20), 100);
     const pageToken = body.pageToken as string | undefined;
     const query = (body.query as string | undefined) || "newer_than:90d";
     const supabase = getSupabaseAdmin();
@@ -33,6 +34,7 @@ export async function POST(request: NextRequest) {
     const gmail = getGmailClient(token);
     const listed = await listMessageIds(gmail, { maxResults, pageToken, query });
     const messages = [];
+    const touchedThreadIds = new Set<string>();
 
     for (const messageId of listed.ids) {
       const message = await fetchMessage(gmail, messageId);
@@ -53,6 +55,7 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (threadError) throw threadError;
+      touchedThreadIds.add(thread.id);
 
       const { data: dbMessage, error: messageError } = await supabase
         .from("email_messages")
@@ -72,6 +75,7 @@ export async function POST(request: NextRequest) {
             plain_text: message.plainText,
             html_text: message.htmlText,
             raw_headers: message.headers,
+            message_summary: summarizePlainText(message.plainText || message.snippet || ""),
           },
           { onConflict: "user_id,gmail_message_id" },
         )
@@ -111,7 +115,7 @@ export async function POST(request: NextRequest) {
       if (chunkError) throw chunkError;
     }
 
-    await summarizeRecentlyTouchedThreads(userId);
+    await summarizeRecentlyTouchedThreads(userId, Array.from(touchedThreadIds));
 
     return NextResponse.json({
       synced: messages.length,
@@ -127,27 +131,100 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function summarizeRecentlyTouchedThreads(userId: string) {
-  const supabase = getSupabaseAdmin();
-  const { data: threads } = await supabase
-    .from("email_threads")
-    .select("id, subject")
-    .eq("user_id", userId)
-    .is("thread_summary", null)
-    .limit(8);
+function summarizePlainText(text: string) {
+  const cleaned = text
+    .replace(/\[[^\]]+\]\([^)]+\)/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  for (const thread of threads || []) {
+  if (!cleaned) return null;
+  return cleaned.slice(0, 260);
+}
+
+function heuristicCategory(input: string): EmailCategory {
+  const text = input.toLowerCase();
+
+  if (/(newsletter|unsubscribe|rundown|ainews|digest|weekly|daily papers|front page of ai)/i.test(text)) {
+    return "Newsletters";
+  }
+
+  if (/(job|hiring|recruit|internship|application|interview|open jobs|career)/i.test(text)) {
+    return "Job / Recruitment";
+  }
+
+  if (/(payment|paid|invoice|receipt|bank|upi|₹|rs\.?|refund|credited|debited|famx)/i.test(text)) {
+    return "Finance";
+  }
+
+  if (/(otp|verification code|sign-in|login|security alert|password|download is ready|notification)/i.test(text)) {
+    return "Notifications";
+  }
+
+  if (/(meeting|project|team|client|proposal|contract|deadline|workflows|gtc|nvidia)/i.test(text)) {
+    return "Work / Professional";
+  }
+
+  if (/(hi |hello|thanks|thank you|dear )/i.test(text)) {
+    return "Personal";
+  }
+
+  return "Other";
+}
+
+function heuristicPriority(input: string): "low" | "medium" | "high" {
+  const text = input.toLowerCase();
+  if (/(urgent|asap|immediately|deadline|security alert|verification code|payment failed)/i.test(text)) {
+    return "high";
+  }
+  if (/(interview|application|invoice|payment|meeting|action required)/i.test(text)) {
+    return "medium";
+  }
+  return "low";
+}
+
+function buildFallbackSummary(subject: string, messages: Array<{ sender: string | null; plain_text: string | null }>) {
+  const first = messages[0];
+  const sender = first?.sender || "Unknown sender";
+  const preview = summarizePlainText(messages.map((message) => message.plain_text || "").join(" ")) || "No readable body was extracted.";
+  return `${sender} sent ${messages.length} message${messages.length === 1 ? "" : "s"} about "${subject}". ${preview}`;
+}
+
+async function summarizeRecentlyTouchedThreads(userId: string, touchedThreadIds: string[]) {
+  const supabase = getSupabaseAdmin();
+  const baseQuery = supabase.from("email_threads").select("id, subject").eq("user_id", userId);
+  const { data: threads } = touchedThreadIds.length
+    ? await baseQuery.in("id", touchedThreadIds)
+    : await baseQuery.is("thread_summary", null).limit(20);
+
+  for (const [index, thread] of (threads || []).entries()) {
     const { data: messages } = await supabase
       .from("email_messages")
-      .select("sender, sent_at, plain_text")
+      .select("sender, sent_at, plain_text, subject, snippet")
       .eq("thread_id", thread.id)
       .order("sent_at", { ascending: true });
 
     if (!messages?.length) continue;
 
+    const subject = thread.subject || messages[0]?.subject || "(No subject)";
+    const categoryInput = [subject, ...messages.map((message) => `${message.sender || ""} ${message.snippet || ""} ${message.plain_text || ""}`)]
+      .join("\n")
+      .slice(0, 6000);
+
+    const fallback = {
+      thread_summary: buildFallbackSummary(subject, messages),
+      category: heuristicCategory(categoryInput),
+      priority: heuristicPriority(categoryInput),
+      key_facts: [subject, messages[0]?.sender].filter(Boolean).slice(0, 3),
+    };
+
+    await supabase.from("email_threads").update(fallback).eq("id", thread.id);
+
+    if (index > 4) continue;
+
     try {
       const summary = await summarizeThread({
-        subject: thread.subject || "(No subject)",
+        subject,
         messages: messages.map((message) => ({
           sender: message.sender,
           sentAt: message.sent_at,
@@ -165,7 +242,7 @@ async function summarizeRecentlyTouchedThreads(userId: string) {
         })
         .eq("id", thread.id);
     } catch {
-      // Keep sync successful even if AI quota is temporarily unavailable.
+      // Heuristic processing above keeps the product usable even if AI quota is temporarily unavailable.
     }
   }
 }

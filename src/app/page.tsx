@@ -40,6 +40,7 @@ export default function Home() {
   const [draftMode, setDraftMode] = useState<"reply" | "compose">("reply");
   const [to, setTo] = useState("");
   const [draft, setDraft] = useState<{ subject: string; body: string; tone: string } | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [status, setStatus] = useState<Status>({
     tone: "idle",
     message: "Start by connecting Gmail. Then sync your inbox to unlock the AI features.",
@@ -49,6 +50,8 @@ export default function Home() {
     () => threads.find((thread) => thread.id === selectedThreadId),
     [threads, selectedThreadId],
   );
+  const defaultReplyRecipient = draftMode === "reply" && messages[0]?.sender ? extractEmail(messages[0].sender) : "";
+  const recipientValue = to || defaultReplyRecipient;
 
   const processedCount = threads.filter((thread) => thread.thread_summary || thread.category).length;
   const highPriorityCount = threads.filter((thread) => thread.priority === "high").length;
@@ -117,12 +120,16 @@ export default function Home() {
   }, [selectedThreadId]);
 
   async function syncInbox() {
-    setStatus({ tone: "loading", message: "Syncing Gmail and processing recent threads..." });
+    setIsSyncing(true);
+    setStatus({ tone: "loading", message: "Syncing a small batch now. This keeps the demo responsive while pagination handles larger inboxes." });
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 45000);
     try {
       const response = await fetch("/api/gmail/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxResults: 50, query: "newer_than:90d" }),
+        body: JSON.stringify({ maxResults: 20, query: "newer_than:90d" }),
+        signal: controller.signal,
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Sync failed");
@@ -134,8 +141,16 @@ export default function Home() {
     } catch (error) {
       setStatus({
         tone: "error",
-        message: error instanceof Error ? error.message : "Sync failed",
+        message:
+          error instanceof DOMException && error.name === "AbortError"
+            ? "Sync took too long for the live demo. Use the already synced data or try another batch."
+            : error instanceof Error
+              ? error.message
+              : "Sync failed",
       });
+    } finally {
+      window.clearTimeout(timeout);
+      setIsSyncing(false);
     }
   }
 
@@ -219,7 +234,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          to,
+          to: recipientValue,
           subject: draft.subject,
           body: draft.body,
           threadId: draftMode === "reply" ? selectedThreadId : undefined,
@@ -263,10 +278,11 @@ export default function Home() {
               </a>
               <button
                 onClick={syncInbox}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium hover:bg-slate-50"
+                disabled={isSyncing}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <RefreshCw size={18} />
-                Sync inbox
+                {isSyncing ? "Syncing..." : "Sync inbox"}
               </button>
             </div>
           </div>
@@ -328,7 +344,7 @@ export default function Home() {
                     >
                       <div className="line-clamp-2 font-medium">{thread.subject || "(No subject)"}</div>
                       <div className="mt-2 flex items-center justify-between text-xs opacity-75">
-                        <span>{thread.category || "Unprocessed"}</span>
+                        <span>{thread.category || "Pending"}</span>
                         <span>{thread.message_count || 1} msg</span>
                       </div>
                     </button>
@@ -367,7 +383,7 @@ export default function Home() {
                         <div>
                           <h2 className="text-2xl font-semibold">{selectedThread.subject || "(No subject)"}</h2>
                           <p className="mt-1 text-sm text-slate-500">
-                            {selectedThread.category || "Uncategorized"} |{" "}
+                            {selectedThread.category || "Pending"} |{" "}
                             {selectedThread.last_message_at
                               ? new Date(selectedThread.last_message_at).toLocaleString()
                               : "No date"}
@@ -377,7 +393,7 @@ export default function Home() {
                       </div>
                       <p className="mt-5 rounded-md bg-slate-50 p-4 text-sm leading-6 text-slate-700">
                         {selectedThread.thread_summary ||
-                          "No AI summary yet. Syncing processes recent threads when AI credentials are available."}
+                          "Summary is pending. Sync another batch to process this thread."}
                       </p>
                       {selectedThread.key_facts?.length ? (
                         <div className="mt-4 flex flex-wrap gap-2">
@@ -406,7 +422,7 @@ export default function Home() {
                             <span>{message.sent_at ? new Date(message.sent_at).toLocaleString() : "No date"}</span>
                           </div>
                           <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                            {message.plain_text || message.snippet || "No readable body found."}
+                            {cleanMessagePreview(message.message_summary || message.snippet || message.plain_text || "")}
                           </p>
                         </article>
                       ))}
@@ -465,7 +481,7 @@ export default function Home() {
                   <div>
                     <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Recipient</label>
                     <input
-                      value={to}
+                      value={recipientValue}
                       onChange={(event) => setTo(event.target.value)}
                       className="mt-2 h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-900"
                       placeholder="name@example.com"
@@ -483,7 +499,8 @@ export default function Home() {
                 </div>
                 <button
                   onClick={draftEmail}
-                  className="mt-3 inline-flex h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-medium text-white hover:bg-slate-800"
+                  disabled={!draftPrompt.trim() || (draftMode === "reply" && !selectedThreadId)}
+                  className="mt-3 inline-flex h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Send size={18} />
                   Generate draft
@@ -503,7 +520,8 @@ export default function Home() {
                     />
                     <button
                       onClick={sendDraft}
-                      className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-emerald-700 px-4 text-sm font-medium text-white hover:bg-emerald-800"
+                      disabled={!recipientValue.trim() || !draft.subject.trim() || !draft.body.trim()}
+                      className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-emerald-700 px-4 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       Send via Gmail
                     </button>
@@ -593,6 +611,26 @@ function AnswerBlock({ answer }: { answer: ChatAnswer | null }) {
       </div>
     </div>
   );
+}
+
+function extractEmail(sender: string) {
+  const match = sender.match(/<([^>]+)>/) || sender.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[1] || match?.[0] || sender;
+}
+
+function cleanMessagePreview(text: string) {
+  const cleaned = text
+    .replace(/\[[^\]]+\]\([^)]+\)/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/View image:.*?(\r?\n|$)/gi, "")
+    .replace(/Follow image link:.*?(\r?\n|$)/gi, "")
+    .replace(/Caption:.*?(\r?\n|$)/gi, "")
+    .replace(/[-—_]{4,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return "No readable body found.";
+  return cleaned.length > 520 ? `${cleaned.slice(0, 520)}...` : cleaned;
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
