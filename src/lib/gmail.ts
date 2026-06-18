@@ -160,3 +160,31 @@ export async function listMessageIds(
     resultSizeEstimate: response.data.resultSizeEstimate || 0,
   };
 }
+
+function encodeBase64Url(value: string) {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+export function buildRawEmail(input: {
+  to: string;
+  subject: string;
+  body: string;
+  inReplyTo?: string | null;
+  references?: string | null;
+}) {
+  const headers = [
+    `To: ${input.to}`,
+    `Subject: ${input.subject}`,
+    "Content-Type: text/plain; charset=\"UTF-8\"",
+    "MIME-Version: 1.0",
+  ];
+
+  if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`);
+  if (input.references) headers.push(`References: ${input.references}`);
+
+  return encodeBase64Url(`${headers.join("\r\n")}\r\n\r\n${input.body}`);
+}

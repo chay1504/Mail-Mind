@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("email_threads")
       .select(
-        "id, gmail_thread_id, subject, participants, last_message_at, thread_summary, category, message_count",
+        "id, gmail_thread_id, subject, participants, last_message_at, thread_summary, category, priority, key_facts, message_count",
       )
       .eq("user_id", userId)
       .order("last_message_at", { ascending: false })
