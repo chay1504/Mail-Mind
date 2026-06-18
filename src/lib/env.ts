@@ -1,7 +1,11 @@
 const optionalEnv = (name: string) => process.env[name]?.trim() || "";
 
 export function getBaseUrl() {
-  return optionalEnv("NEXT_PUBLIC_APP_URL") || "http://localhost:3000";
+  let url = optionalEnv("NEXT_PUBLIC_APP_URL") || "http://localhost:3000";
+  if (url && !url.startsWith("http://") && !url.startsWith("https://")) {
+    url = `https://${url}`;
+  }
+  return url;
 }
 
 export function requireEnv(name: string) {
