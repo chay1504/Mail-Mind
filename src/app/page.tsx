@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   FileText,
   Inbox,
+  LogOut,
   Mail,
   MessageSquareText,
   RefreshCw,
@@ -42,6 +43,7 @@ export default function Home() {
   const [draft, setDraft] = useState<{ subject: string; body: string; tone: string } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDrafting, setIsDrafting] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   const [status, setStatus] = useState<Status>({
     tone: "idle",
     message: "Start by connecting Gmail. Then sync your inbox to unlock the AI features.",
@@ -62,13 +64,34 @@ export default function Home() {
     try {
       const response = await fetch("/api/gmail/threads");
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not load threads");
+      if (!response.ok) {
+        if (response.status === 401) setIsConnected(false);
+        throw new Error(data.error || "Could not load threads");
+      }
       setThreads(data.threads || []);
+      setIsConnected(true);
       if (!selectedThreadId && data.threads?.[0]?.id) {
         setSelectedThreadId(data.threads[0].id);
       }
     } catch {
       setThreads([]);
+    }
+  }
+
+  async function handleDisconnect() {
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (response.ok) {
+        setIsConnected(false);
+        setThreads([]);
+        setMessages([]);
+        setSelectedThreadId("");
+        setAnswer(null);
+        setDraft(null);
+        setStatus({ tone: "idle", message: "Disconnected successfully." });
+      }
+    } catch (error) {
+      console.error(error);
     }
   }
 
@@ -79,13 +102,21 @@ export default function Home() {
       try {
         const response = await fetch("/api/gmail/threads");
         const data = await response.json();
-        if (!response.ok || !active) return;
+        if (!response.ok) {
+          if (response.status === 401) setIsConnected(false);
+          return;
+        }
+        if (!active) return;
         setThreads(data.threads || []);
+        setIsConnected(true);
         if (data.threads?.[0]?.id) {
           setSelectedThreadId(data.threads[0].id);
         }
       } catch {
-        if (active) setThreads([]);
+        if (active) {
+          setThreads([]);
+          setIsConnected(false);
+        }
       }
     }
 
@@ -274,16 +305,26 @@ export default function Home() {
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
-              <a
-                href="/api/auth/google/start"
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-medium text-white hover:bg-slate-800"
-              >
-                <Mail size={18} />
-                Connect Gmail
-              </a>
+              {isConnected ? (
+                <button
+                  onClick={handleDisconnect}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700"
+                >
+                  <LogOut size={18} />
+                  Disconnect
+                </button>
+              ) : (
+                <a
+                  href="/api/auth/google/start"
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-medium text-white hover:bg-slate-800"
+                >
+                  <Mail size={18} />
+                  Connect Gmail
+                </a>
+              )}
               <button
                 onClick={syncInbox}
-                disabled={isSyncing}
+                disabled={isSyncing || !isConnected}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <RefreshCw size={18} />
