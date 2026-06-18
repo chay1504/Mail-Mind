@@ -41,6 +41,7 @@ export default function Home() {
   const [to, setTo] = useState("");
   const [draft, setDraft] = useState<{ subject: string; body: string; tone: string } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isDrafting, setIsDrafting] = useState(false);
   const [status, setStatus] = useState<Status>({
     tone: "idle",
     message: "Start by connecting Gmail. Then sync your inbox to unlock the AI features.",
@@ -200,6 +201,8 @@ export default function Home() {
   }
 
   async function draftEmail() {
+    if (isDrafting) return;
+    setIsDrafting(true);
     setActiveTab("compose");
     setStatus({ tone: "loading", message: "Drafting with the selected context..." });
     setDraft(null);
@@ -223,6 +226,8 @@ export default function Home() {
         tone: "error",
         message: error instanceof Error ? error.message : "Draft failed",
       });
+    } finally {
+      setIsDrafting(false);
     }
   }
 
@@ -498,12 +503,14 @@ export default function Home() {
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={draftEmail}
-                  disabled={!draftPrompt.trim() || (draftMode === "reply" && !selectedThreadId)}
+                  onPointerUp={draftEmail}
+                  disabled={isDrafting || !draftPrompt.trim() || (draftMode === "reply" && !selectedThreadId)}
                   className="mt-3 inline-flex h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Send size={18} />
-                  Generate draft
+                  {isDrafting ? "Drafting..." : "Generate draft"}
                 </button>
                 {draft && (
                   <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-4">
@@ -519,6 +526,7 @@ export default function Home() {
                       className="mt-3 min-h-56 w-full rounded-md border border-slate-200 p-3 text-sm leading-6 text-slate-700 outline-none focus:border-slate-900"
                     />
                     <button
+                      type="button"
                       onClick={sendDraft}
                       disabled={!recipientValue.trim() || !draft.subject.trim() || !draft.body.trim()}
                       className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-emerald-700 px-4 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
