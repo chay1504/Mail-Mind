@@ -163,34 +163,55 @@ export async function answerFromSources(input: {
   sources: Array<SourceRef & { content: string }>;
   conversation?: Array<{ role: "user" | "assistant"; content: string }>;
 }): Promise<ChatAnswer> {
-  const text = await callGemini(
-    JSON.stringify({
-      task: "Answer the user's question using only the provided email sources.",
-      hardRules: [
-        "Do not use outside knowledge.",
-        "If the answer is not present, say that it is not found in the synced emails.",
-        "Cite source message ids in the sources array.",
-        "Synthesize across emails only when the sources support it.",
-      ],
-      question: input.question,
-      conversation: input.conversation || [],
-      sources: input.sources.map((source) => ({
+  let text = "";
+  try {
+    text = await callGemini(
+      JSON.stringify({
+        task: "Answer the user's question using only the provided email sources.",
+        hardRules: [
+          "Do not use outside knowledge.",
+          "If the answer is not present, say that it is not found in the synced emails.",
+          "Cite source message ids in the sources array.",
+          "Synthesize across emails only when the sources support it.",
+        ],
+        question: input.question,
+        conversation: input.conversation || [],
+        sources: input.sources.map((source) => ({
+          messageId: source.messageId,
+          threadId: source.threadId,
+          subject: source.subject,
+          sender: source.sender,
+          date: source.date,
+          snippet: source.snippet,
+          content: source.content.slice(0, 6000),
+        })),
+        outputShape: {
+          answer: "grounded answer",
+          confidence: "high | medium | low",
+          usedMessageIds: ["message ids used"],
+        },
+      }),
+      "You are a source-strict Gmail assistant. Return valid JSON only.",
+    );
+  } catch {
+    const fallbackSources = input.sources.slice(0, 5);
+    return {
+      answer: fallbackSources.length
+        ? `AI quota is temporarily unavailable, so here are the most relevant synced emails I found for "${input.question}": ${fallbackSources
+            .map((source) => `${source.subject} from ${source.sender}`)
+            .join("; ")}.`
+        : "I could not find matching synced emails for that question.",
+      confidence: fallbackSources.length ? "medium" : "low",
+      sources: fallbackSources.map((source) => ({
         messageId: source.messageId,
         threadId: source.threadId,
         subject: source.subject,
         sender: source.sender,
         date: source.date,
         snippet: source.snippet,
-        content: source.content.slice(0, 6000),
       })),
-      outputShape: {
-        answer: "grounded answer",
-        confidence: "high | medium | low",
-        usedMessageIds: ["message ids used"],
-      },
-    }),
-    "You are a source-strict Gmail assistant. Return valid JSON only.",
-  );
+    };
+  }
 
   const parsed = parseJson<{
     answer: string;
@@ -228,20 +249,34 @@ export async function draftEmail(input: {
   thread?: Array<{ sender: string | null; sentAt: string | null; body: string }>;
   subject?: string | null;
 }) {
-  const text = await callGemini(
-    JSON.stringify({
-      task: input.mode === "reply" ? "Draft a thread-aware reply" : "Draft a new email",
-      prompt: input.prompt,
-      subject: input.subject,
-      threadContext: input.thread || [],
-      outputShape: {
-        subject: "email subject",
-        body: "complete professional email body",
-        tone: "short tone description",
-      },
-    }),
-    "You write concise professional emails. For replies, respect the provided thread context. Return valid JSON only.",
-  );
+  let text = "";
+  try {
+    text = await callGemini(
+      JSON.stringify({
+        task: input.mode === "reply" ? "Draft a thread-aware reply" : "Draft a new email",
+        prompt: input.prompt,
+        subject: input.subject,
+        threadContext: input.thread || [],
+        outputShape: {
+          subject: "email subject",
+          body: "complete professional email body",
+          tone: "short tone description",
+        },
+      }),
+      "You write concise professional emails. For replies, respect the provided thread context. Return valid JSON only.",
+    );
+  } catch {
+    const subject = input.subject || "Draft email";
+    const contextLine = input.thread?.length
+      ? "I reviewed the previous thread context and wanted to respond clearly."
+      : "I wanted to follow up with a clear note.";
+
+    return {
+      subject,
+      body: `Hi,\n\n${contextLine}\n\n${input.prompt}\n\nBest,\nChaitanya`,
+      tone: "fallback professional",
+    };
+  }
 
   return parseJson<{ subject: string; body: string; tone: string }>(text, {
     subject: input.subject || "Draft email",
